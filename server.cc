@@ -123,6 +123,9 @@ public:
     resp["qp_num"] = local_info.qpNum;
     resp["gid"] = RdmaGid2Str(local_info.gid);
     resp["gid_index"] = local_info.gid_index;
+    resp["rkey"] = s_ctx.mr->rkey;
+    resp["remote_addr"] =
+        reinterpret_cast<unsigned long long>(s_ctx.buf); // NOLINT
   }
 };
 
@@ -171,10 +174,11 @@ int main(int argc, char *argv[]) {
       if (memcmp(s_ctx.buf + which * kWriteSize,
                  compare_buffer[wc[i].imm_data % 26], kWriteSize) != 0) {
         printf("OOPS: write %c it not as expected %d\n",
-               static_cast<int>(*(s_ctx.buf + which * kWriteSize)), 'a' + (wc[i].imm_data % 26));
+               static_cast<int>(*(s_ctx.buf + which * kWriteSize)),
+               'a' + (wc[i].imm_data % 26));
       }
-      RdmaPostRecv(kWriteSize, s_ctx.mr->lkey,
-                   wc[i].wr_id, s_ctx.qp, reinterpret_cast<void*>(wc[i].wr_id)); // NOLINT
+      RdmaPostRecv(kWriteSize, s_ctx.mr->lkey, wc[i].wr_id, s_ctx.qp,
+                   reinterpret_cast<void *>(wc[i].wr_id)); // NOLINT
     }
   }
   s_ctx.DestroyRdmaEnvironment();

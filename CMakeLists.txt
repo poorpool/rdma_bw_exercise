@@ -16,3 +16,9 @@ target_link_libraries(saw_server
   ibverbs
   libjson-rpc-cpp::jsonrpcserver
 )
+
+add_executable(saw_client client.cc rdma.cc)
+target_link_libraries(saw_client
+  ibverbs
+  libjson-rpc-cpp::jsonrpcclient
+)
