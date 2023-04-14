@@ -98,7 +98,7 @@ public:
     ibv_query_gid(s_ctx.dev_info.ctx, kRdmaDefaultPort, kGidIndex,
                   &local_info.gid);
     local_info.gid_index = kGidIndex;
-    printf("local lid %d qp_num %d gid %s gid_index %d", local_info.lid,
+    printf("local lid %d qp_num %d gid %s gid_index %d\n", local_info.lid,
            local_info.qpNum, RdmaGid2Str(local_info.gid).c_str(),
            local_info.gid_index);
 
@@ -107,7 +107,7 @@ public:
         .qpNum = req["qp_num"].asUInt(),
         .gid = RdmaStr2Gid(req["gid"].asString()),
         .gid_index = req["gid_index"].asInt()};
-    printf("remote lid %d qp_num %d gid %s gid_index %d", local_info.lid,
+    printf("remote lid %d qp_num %d gid %s gid_index %d\n", local_info.lid,
            local_info.qpNum, RdmaGid2Str(local_info.gid).c_str(),
            local_info.gid_index);
 
@@ -139,6 +139,8 @@ void HandleCtrlc(int /*signum*/) {
   should_infini_loop = false;
 }
 
+  ibv_wc wc[kRdmaQueueSize];
+  char compare_buffer[26][kWriteSize];
 int main(int argc, char *argv[]) {
   signal(SIGINT, HandleCtrlc);
   signal(SIGTERM, HandleCtrlc);
@@ -157,8 +159,6 @@ int main(int argc, char *argv[]) {
   jrpc_server->StartListening();
   printf("server start listening...\n");
 
-  ibv_wc wc[kRdmaQueueSize];
-  char compare_buffer[26][kWriteSize];
   for (int i = 0; i < 26; i++) {
     char c = 'a' + i;
     memset(compare_buffer[i], c, kWriteSize);
@@ -173,7 +173,7 @@ int main(int argc, char *argv[]) {
           (kRdmaQueueSize / 2);
       if (memcmp(s_ctx.buf + which * kWriteSize,
                  compare_buffer[wc[i].imm_data % 26], kWriteSize) != 0) {
-        printf("OOPS: write %c it not as expected %d\n",
+        printf("OOPS: write %d it not as expected %d\n",
                static_cast<int>(*(s_ctx.buf + which * kWriteSize)),
                'a' + (wc[i].imm_data % 26));
       }

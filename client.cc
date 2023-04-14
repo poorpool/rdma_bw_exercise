@@ -13,11 +13,13 @@
 #include <malloc.h>
 #include <queue>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using std::cerr;
 using std::endl;
 using std::string;
+using std::unordered_map;
 
 struct ClientContext {
   int link_type; // IBV_LINK_LAYER_XX
@@ -33,6 +35,7 @@ struct ClientContext {
   std::queue<size_t> que;
   uint32_t rkey; // 对面的 rkey
   uint64_t remote_addr;
+  unordered_map<uint64_t, int> wr_id2id;
 
   void BuildRdmaEnvironment(const string &dev_name) {
     // 1. dev_info and pd
@@ -95,7 +98,7 @@ void ExchangeQP() { // NOLINT
   ibv_query_gid(c_ctx.dev_info.ctx, kRdmaDefaultPort, kGidIndex,
                 &local_info.gid);
   local_info.gid_index = kGidIndex;
-  printf("local lid %d qp_num %d gid %s gid_index %d", local_info.lid,
+  printf("local lid %d qp_num %d gid %s gid_index %d\n", local_info.lid,
          local_info.qpNum, RdmaGid2Str(local_info.gid).c_str(),
          local_info.gid_index);
   Json::Value req;
@@ -113,7 +116,7 @@ void ExchangeQP() { // NOLINT
       .qpNum = resp["qp_num"].asUInt(),
       .gid = RdmaStr2Gid(resp["gid"].asString()),
       .gid_index = resp["gid_index"].asInt()};
-  printf("remote lid %d qp_num %d gid %s gid_index %d", local_info.lid,
+  printf("remote lid %d qp_num %d gid %s gid_index %d\n", local_info.lid,
          local_info.qpNum, RdmaGid2Str(local_info.gid).c_str(),
          local_info.gid_index);
   c_ctx.rkey = resp["rkey"].asUInt();
@@ -126,6 +129,7 @@ bool should_infini_loop = true;
 
 void HandleCtrlc(int /*signum*/) { should_infini_loop = false; }
 
+ibv_wc wc[kRdmaQueueSize];
 int main(int argc, char *argv[]) {
   signal(SIGINT, HandleCtrlc);
   signal(SIGTERM, HandleCtrlc);
@@ -142,16 +146,21 @@ int main(int argc, char *argv[]) {
 
   ExchangeQP();
 
-  ibv_wc wc[kRdmaQueueSize];
   uint32_t id = 0;
   while (should_infini_loop) {
     int n = ibv_poll_cq(c_ctx.cq, kRdmaQueueSize, wc);
     for (int i = 0; i < n; i++) {
       if (wc[i].status == IBV_WC_SUCCESS) {
         if (wc[i].opcode == IBV_WC_RDMA_WRITE) {
-          printf("write wr_id %lu successed\n", wc[i].wr_id);
+          printf("write #%d wr_id %lu successed\n", c_ctx.wr_id2id[wc[i].wr_id],
+                 wc[i].wr_id);
         } else if (wc[i].opcode == IBV_WC_SEND) {
-          printf("send wr_id %lu successed\n", wc[i].wr_id);
+          printf("send  #%d wr_id %lu successed\n", c_ctx.wr_id2id[wc[i].wr_id],
+                 wc[i].wr_id);
+          size_t loc = wc[i].wr_id - reinterpret_cast<uint64_t>(c_ctx.buf);
+          loc /= kWriteSize;
+          loc -= kRdmaQueueSize / 2;
+          c_ctx.que.push(loc);
         } else {
           printf("unknown wc[i].opcode %d\n", wc[i].opcode);
         }
@@ -172,13 +181,11 @@ int main(int argc, char *argv[]) {
             .length = kWriteSize,
             .lkey = c_ctx.mr->lkey};
 
-        struct ibv_send_wr write_wr = {
-            .wr_id = write_list.addr,
-            .sg_list = &write_list,
-            .num_sge = 1,
-            .opcode = IBV_WR_RDMA_WRITE,
-            .send_flags = IBV_SEND_SIGNALED
-        };
+        struct ibv_send_wr write_wr = {.wr_id = write_list.addr,
+                                       .sg_list = &write_list,
+                                       .num_sge = 1,
+                                       .opcode = IBV_WR_RDMA_WRITE,
+                                       .send_flags = IBV_SEND_SIGNALED};
         write_wr.wr.rdma.remote_addr = c_ctx.remote_addr + loc * kWriteSize;
         write_wr.wr.rdma.rkey = c_ctx.rkey;
 
@@ -195,12 +202,15 @@ int main(int argc, char *argv[]) {
                                       .send_flags = IBV_SEND_SIGNALED,
                                       .imm_data = id};
         write_wr.next = &send_wr;
+        c_ctx.wr_id2id[send_wr.wr_id] = id;
+        c_ctx.wr_id2id[write_wr.wr_id] = id;
 
-        ret = ibv_post_send(c_ctx.qp, &send_wr, &bad_send_wr);
+        ret = ibv_post_send(c_ctx.qp, &write_wr, &bad_send_wr);
         if (ret != 0) {
           printf("post send error %d\n", ret);
         } else {
-          printf("write-send #%d posted, write wr_id=%lu, send wr_id=%lu", id, write_wr.wr_id, send_wr.wr_id);
+          printf("write-send #%d posted, write wr_id=%lu, send wr_id=%lu\n", id,
+                 write_wr.wr_id, send_wr.wr_id);
         }
       }
       id++;
