@@ -12,6 +12,7 @@
 #include <malloc.h>
 #include <queue>
 #include <string>
+#include <sys/time.h>
 #include <vector>
 
 using jsonrpc::JSON_STRING;
@@ -20,6 +21,8 @@ using jsonrpc::Procedure;
 using std::cerr;
 using std::endl;
 using std::string;
+
+constexpr int64_t kShowInterval = 2000000;
 
 struct ServerContext {
   int link_type; // IBV_LINK_LAYER_XX
@@ -139,8 +142,15 @@ void HandleCtrlc(int /*signum*/) {
   should_infini_loop = false;
 }
 
-  ibv_wc wc[kRdmaQueueSize];
-  char compare_buffer[26][kWriteSize];
+ibv_wc wc[kRdmaQueueSize];
+char compare_buffer[26][kWriteSize];
+
+int64_t GetUs() {
+  timeval tv;
+  gettimeofday(&tv, nullptr);
+  return tv.tv_usec + tv.tv_sec * 1000000L;
+}
+
 int main(int argc, char *argv[]) {
   signal(SIGINT, HandleCtrlc);
   signal(SIGTERM, HandleCtrlc);
@@ -163,10 +173,14 @@ int main(int argc, char *argv[]) {
     char c = 'a' + i;
     memset(compare_buffer[i], c, kWriteSize);
   }
+  int64_t last_ts = GetUs();
+  size_t cnt_since_last_ts = 0;
   while (should_infini_loop) {
     int n = ibv_poll_cq(s_ctx.cq, kRdmaQueueSize, wc);
     for (int i = 0; i < n; i++) {
+#ifdef SHOW_DEBUG_INFO
       printf("received #%d send\n", wc[i].imm_data);
+#endif
       uint64_t wr_id = wc[i].wr_id;
       size_t which =
           (wr_id - reinterpret_cast<uint64_t>(s_ctx.buf)) / kWriteSize -
@@ -179,6 +193,14 @@ int main(int argc, char *argv[]) {
       }
       RdmaPostRecv(kWriteSize, s_ctx.mr->lkey, wc[i].wr_id, s_ctx.qp,
                    reinterpret_cast<void *>(wc[i].wr_id)); // NOLINT
+    }
+    cnt_since_last_ts += n;
+    int64_t curr_ts = GetUs();
+    if (curr_ts - last_ts >= kShowInterval) {
+      printf("%lu write-send in %.2f seconds\n", cnt_since_last_ts,
+             (curr_ts - last_ts) /  1000000.0);
+      last_ts = curr_ts;
+      cnt_since_last_ts = 0;
     }
   }
   s_ctx.DestroyRdmaEnvironment();

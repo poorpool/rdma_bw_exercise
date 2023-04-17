@@ -4,6 +4,8 @@
 #include <infiniband/verbs.h>
 #include <string>
 #include <vector>
+
+// #define SHOW_DEBUG_INFO
 // NOLINTBEGIN(google-objc-function-naming)
 
 // 一个 RDMA 网卡一个 RdmaDeviceInfo

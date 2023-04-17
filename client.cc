@@ -111,11 +111,11 @@ void ExchangeQP() { // NOLINT
   jsonrpc::Client c(client);
   Json::Value resp = c.CallMethod("ExchangeQP", req);
 
-  RdmaQpExchangeInfo remote_info = {
-      .lid = static_cast<uint16_t>(resp["lid"].asUInt()),
-      .qpNum = resp["qp_num"].asUInt(),
-      .gid = RdmaStr2Gid(resp["gid"].asString()),
-      .gid_index = resp["gid_index"].asInt()};
+  RdmaQpExchangeInfo remote_info;
+  remote_info.lid = static_cast<uint16_t>(resp["lid"].asUInt());
+  remote_info.qpNum = resp["qp_num"].asUInt();
+  remote_info.gid = RdmaStr2Gid(resp["gid"].asString());
+  remote_info.gid_index = resp["gid_index"].asInt();
   printf("remote lid %d qp_num %d gid %s gid_index %d\n", local_info.lid,
          local_info.qpNum, RdmaGid2Str(local_info.gid).c_str(),
          local_info.gid_index);
@@ -152,11 +152,15 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < n; i++) {
       if (wc[i].status == IBV_WC_SUCCESS) {
         if (wc[i].opcode == IBV_WC_RDMA_WRITE) {
+#ifdef SHOW_DEBUG_INFO
           printf("write #%d wr_id %lu successed\n", c_ctx.wr_id2id[wc[i].wr_id],
                  wc[i].wr_id);
+#endif
         } else if (wc[i].opcode == IBV_WC_SEND) {
+#ifdef SHOW_DEBUG_INFO
           printf("send  #%d wr_id %lu successed\n", c_ctx.wr_id2id[wc[i].wr_id],
                  wc[i].wr_id);
+#endif
           size_t loc = wc[i].wr_id - reinterpret_cast<uint64_t>(c_ctx.buf);
           loc /= kWriteSize;
           loc -= kRdmaQueueSize / 2;
@@ -176,31 +180,40 @@ int main(int argc, char *argv[]) {
         int ret = 0;
         struct ibv_send_wr *bad_send_wr;
 
-        struct ibv_sge write_list = {
-            .addr = reinterpret_cast<uintptr_t>(c_ctx.buf + loc * kWriteSize),
-            .length = kWriteSize,
-            .lkey = c_ctx.mr->lkey};
+        struct ibv_sge write_list;
+        memset(&write_list, 0, sizeof(ibv_sge));
+        write_list.addr =
+            reinterpret_cast<uintptr_t>(c_ctx.buf + loc * kWriteSize);
+        write_list.length = kWriteSize;
+        write_list.lkey = c_ctx.mr->lkey;
 
-        struct ibv_send_wr write_wr = {.wr_id = write_list.addr,
-                                       .sg_list = &write_list,
-                                       .num_sge = 1,
-                                       .opcode = IBV_WR_RDMA_WRITE,
-                                       .send_flags = IBV_SEND_SIGNALED};
+        struct ibv_send_wr write_wr;
+        memset(&write_wr, 0, sizeof(ibv_send_wr));
+        write_wr.wr_id = write_list.addr;
+        write_wr.sg_list = &write_list;
+        write_wr.num_sge = 1;
+        write_wr.opcode = IBV_WR_RDMA_WRITE;
+        write_wr.send_flags = IBV_SEND_SIGNALED;
         write_wr.wr.rdma.remote_addr = c_ctx.remote_addr + loc * kWriteSize;
         write_wr.wr.rdma.rkey = c_ctx.rkey;
 
-        struct ibv_sge send_list = {
-            .addr = reinterpret_cast<uintptr_t>(
-                c_ctx.buf + (loc + kRdmaQueueSize / 2) * kWriteSize),
-            .length = 4096,
-            .lkey = c_ctx.mr->lkey};
-        struct ibv_send_wr send_wr = {.wr_id = send_list.addr,
-                                      .next = nullptr,
-                                      .sg_list = &send_list,
-                                      .num_sge = 1,
-                                      .opcode = IBV_WR_SEND_WITH_IMM,
-                                      .send_flags = IBV_SEND_SIGNALED,
-                                      .imm_data = id};
+        struct ibv_sge send_list;
+        memset(&send_list, 0, sizeof(ibv_sge));
+        send_list.addr = reinterpret_cast<uintptr_t>(
+            c_ctx.buf + (loc + kRdmaQueueSize / 2) * kWriteSize);
+        send_list.length = 4096;
+        send_list.lkey = c_ctx.mr->lkey;
+
+        struct ibv_send_wr send_wr;
+        memset(&send_wr, 0, sizeof(ibv_send_wr));
+        send_wr.wr_id = send_list.addr;
+        send_wr.next = nullptr;
+        send_wr.sg_list = &send_list;
+        send_wr.num_sge = 1;
+        send_wr.opcode = IBV_WR_SEND_WITH_IMM;
+        send_wr.send_flags = IBV_SEND_SIGNALED;
+        send_wr.imm_data = id;
+
         write_wr.next = &send_wr;
         c_ctx.wr_id2id[send_wr.wr_id] = id;
         c_ctx.wr_id2id[write_wr.wr_id] = id;
@@ -209,8 +222,10 @@ int main(int argc, char *argv[]) {
         if (ret != 0) {
           printf("post send error %d\n", ret);
         } else {
+#ifdef SHOW_DEBUG_INFO
           printf("write-send #%d posted, write wr_id=%lu, send wr_id=%lu\n", id,
                  write_wr.wr_id, send_wr.wr_id);
+#endif
         }
       }
       id++;
