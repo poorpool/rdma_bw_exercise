@@ -33,6 +33,7 @@ struct ServerContext {
   ibv_mr *mr; // 只是创建删除时候使用
   ibv_cq *cq;
   ibv_qp *qp;
+  ibv_mr *send_mr; // simple 4096 recv mr
 
   void BuildRdmaEnvironment(const string &dev_name) {
     // 1. dev_info and pd
@@ -53,6 +54,14 @@ struct ServerContext {
       cerr << "register mr failed" << endl;
       exit(0);
     }
+    void *small_buf = memalign(4096, 4096);
+    send_mr = ibv_reg_mr(dev_info.pd, small_buf, 4096,
+                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                             IBV_ACCESS_REMOTE_READ);
+    if (send_mr == nullptr) {
+      cerr << "register send_mr failed" << endl;
+      exit(0);
+    }
 
     // 3. create cq
     cq = dev_info.CreateCq(kRdmaQueueSize);
@@ -71,6 +80,9 @@ struct ServerContext {
     ibv_destroy_cq(cq);
     ibv_dereg_mr(mr);
     free(buf);
+    void *small_buf = send_mr->addr;
+    ibv_dereg_mr(send_mr);
+    free(small_buf);
     ibv_dealloc_pd(dev_info.pd);
     ibv_close_device(dev_info.ctx);
   }
@@ -175,18 +187,26 @@ int main(int argc, char *argv[]) {
   }
   int64_t last_ts = GetUs();
   size_t cnt_since_last_ts = 0;
+  int batch_send_cnt = 0;
   while (should_infini_loop) {
     int n = ibv_poll_cq(s_ctx.cq, kRdmaQueueSize, wc);
     for (int i = 0; i < n; i++) {
 #ifdef SHOW_DEBUG_INFO
       printf("received #%d send\n", wc[i].imm_data);
 #endif
+      if (wc[i].wr_id == 114514) {
+        continue;
+      }
+      batch_send_cnt++;
       uint64_t wr_id = wc[i].wr_id;
       size_t which =
           (wr_id - reinterpret_cast<uint64_t>(s_ctx.buf)) / kWriteSize -
           (kRdmaQueueSize / 2);
+      // 警告：谨防这里还没check完，server又发送write过来了
       if (memcmp(s_ctx.buf + which * kWriteSize,
                  compare_buffer[wc[i].imm_data % 26], kWriteSize) != 0) {
+
+        printf("get #%d loc %zu\n", wc[i].imm_data, which);
         printf("OOPS: write %d it not as expected %d\n",
                static_cast<int>(*(s_ctx.buf + which * kWriteSize)),
                'a' + (wc[i].imm_data % 26));
@@ -194,11 +214,16 @@ int main(int argc, char *argv[]) {
       RdmaPostRecv(kWriteSize, s_ctx.mr->lkey, wc[i].wr_id, s_ctx.qp,
                    reinterpret_cast<void *>(wc[i].wr_id)); // NOLINT
     }
+    // 一轮一轮允许发送
+    if (batch_send_cnt == kRdmaQueueSize / 2) {
+      batch_send_cnt = 0;
+      RdmaPostSend(4, s_ctx.send_mr->lkey, 114514, 1919810, s_ctx.qp, s_ctx.send_mr->addr);
+    }
     cnt_since_last_ts += n;
     int64_t curr_ts = GetUs();
     if (curr_ts - last_ts >= kShowInterval) {
       printf("%lu write-send in %.2f seconds\n", cnt_since_last_ts,
-             (curr_ts - last_ts) /  1000000.0);
+             (curr_ts - last_ts) / 1000000.0);
       last_ts = curr_ts;
       cnt_since_last_ts = 0;
     }

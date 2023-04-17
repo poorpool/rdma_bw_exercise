@@ -28,6 +28,8 @@ struct ClientContext {
              // 前 kRdmaQueueSize / 2 做 write 的 buffer，后 kRdmaQueueSize
              // / 2 做 send buffer
   ibv_mr *mr; // 只是创建删除时候使用
+  ibv_mr *recv_mr;
+  char *small_buf;
   ibv_cq *cq;
   ibv_qp *qp;
   char *ip;
@@ -59,6 +61,14 @@ struct ClientContext {
       cerr << "register mr failed" << endl;
       exit(0);
     }
+    small_buf = reinterpret_cast<char *>(memalign(4096, 4096));
+    recv_mr = ibv_reg_mr(dev_info.pd, small_buf, 4096,
+                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                             IBV_ACCESS_REMOTE_READ);
+    if (recv_mr == nullptr) {
+      cerr << "register recv_mr failed" << endl;
+      exit(0);
+    }
 
     // 3. create cq
     cq = dev_info.CreateCq(kRdmaQueueSize);
@@ -77,6 +87,8 @@ struct ClientContext {
     ibv_destroy_cq(cq);
     ibv_dereg_mr(mr);
     free(buf);
+    ibv_dereg_mr(recv_mr);
+    free(small_buf);
     ibv_dealloc_pd(dev_info.pd);
     ibv_close_device(dev_info.ctx);
   }
@@ -123,6 +135,7 @@ void ExchangeQP() { // NOLINT
   c_ctx.remote_addr = resp["remote_addr"].asUInt64();
 
   RdmaModifyQp2Rts(c_ctx.qp, local_info, remote_info);
+  RdmaPostRecv(4096, c_ctx.recv_mr->length, 114514, c_ctx.qp, c_ctx.small_buf);
 }
 
 bool should_infini_loop = true;
@@ -147,6 +160,7 @@ int main(int argc, char *argv[]) {
   ExchangeQP();
 
   uint32_t id = 0;
+  int32_t outgoing_reqs = 0; // send + 1, send success -1
   while (should_infini_loop) {
     int n = ibv_poll_cq(c_ctx.cq, kRdmaQueueSize, wc);
     for (int i = 0; i < n; i++) {
@@ -164,7 +178,13 @@ int main(int argc, char *argv[]) {
           size_t loc = wc[i].wr_id - reinterpret_cast<uint64_t>(c_ctx.buf);
           loc /= kWriteSize;
           loc -= kRdmaQueueSize / 2;
-          c_ctx.que.push(loc);
+        } else if (wc[i].opcode == IBV_WC_RECV) {
+          // printf("Thank you!\n");
+          for (int i = 0; i < kRdmaQueueSize / 2; i++) {
+            c_ctx.que.push(i);
+          }
+          RdmaPostRecv(4096, c_ctx.recv_mr->length, 114514, c_ctx.qp,
+                       c_ctx.small_buf);
         } else {
           printf("unknown wc[i].opcode %d\n", wc[i].opcode);
         }
@@ -226,7 +246,10 @@ int main(int argc, char *argv[]) {
           printf("write-send #%d posted, write wr_id=%lu, send wr_id=%lu\n", id,
                  write_wr.wr_id, send_wr.wr_id);
 #endif
+          // printf("write-send #%d write loc %zu send loc %zu\n", id, loc,
+          // loc+kRdmaQueueSize/2);
         }
+        outgoing_reqs++;
       }
       id++;
     }
