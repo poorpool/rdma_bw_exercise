@@ -70,7 +70,8 @@ Checks: >
   -readability-function-cognitive-complexity,
   -bugprone-narrowing-conversions,
   -bugprone-easily-swappable-parameters,
-  -bugprone-implicit-widening-of-multiplication-result
+  -bugprone-implicit-widening-of-multiplication-result,
+  -performance-avoid-endl
 
 # Turn all the warnings from the checks above into errors.
 WarningsAsErrors: "*"

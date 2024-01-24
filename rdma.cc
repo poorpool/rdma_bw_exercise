@@ -1,6 +1,5 @@
 #include "rdma.h"
 #include <arpa/inet.h>
-#include <cstddef>
 #include <cstring>
 #include <infiniband/verbs.h>
 #include <string>

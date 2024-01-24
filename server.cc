@@ -1,8 +1,6 @@
 #include "rdma.h"
-#include <csignal>
-#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <infiniband/verbs.h>
 #include <iostream>
 #include <jsonrpccpp/common/procedure.h>
@@ -10,7 +8,6 @@
 #include <jsonrpccpp/server.h>
 #include <jsonrpccpp/server/connectors/tcpsocketserver.h>
 #include <malloc.h>
-#include <queue>
 #include <string>
 #include <sys/time.h>
 #include <vector>
@@ -27,13 +24,10 @@ constexpr int64_t kShowInterval = 2000000;
 struct ServerContext {
   int link_type; // IBV_LINK_LAYER_XX
   RdmaDeviceInfo dev_info;
-  char *buf; // 存放 write/send 的 buffer, kWriteSize * kRdmaQueueSize 长
-             // 前 kRdmaQueueSize / 2 做接收 write 的 buffer，后 kRdmaQueueSize
-             // / 2 做 recv buffer
+  char *buf;
   ibv_mr *mr; // 只是创建删除时候使用
   ibv_cq *cq;
   ibv_qp *qp;
-  ibv_mr *send_mr; // simple 4096 recv mr
 
   void BuildRdmaEnvironment(const string &dev_name) {
     // 1. dev_info and pd
@@ -46,25 +40,18 @@ struct ServerContext {
     dev_info = dev_infos[0];
 
     // 2. mr and buffer
-    buf = reinterpret_cast<char *>(memalign(4096, kWriteSize * kRdmaQueueSize));
-    mr = ibv_reg_mr(dev_info.pd, buf, kWriteSize * kRdmaQueueSize,
+    buf =
+        reinterpret_cast<char *>(memalign(4096, kBufferSize * kRdmaQueueSize));
+    mr = ibv_reg_mr(dev_info.pd, buf, kBufferSize * kRdmaQueueSize,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                         IBV_ACCESS_REMOTE_READ);
     if (mr == nullptr) {
       cerr << "register mr failed" << endl;
       exit(0);
     }
-    void *small_buf = memalign(4096, 4096);
-    send_mr = ibv_reg_mr(dev_info.pd, small_buf, 4096,
-                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                             IBV_ACCESS_REMOTE_READ);
-    if (send_mr == nullptr) {
-      cerr << "register send_mr failed" << endl;
-      exit(0);
-    }
 
     // 3. create cq
-    cq = dev_info.CreateCq(kRdmaQueueSize);
+    cq = dev_info.CreateCq(kRdmaQueueSize * 2);
     if (cq == nullptr) {
       cerr << "create cq failed" << endl;
       exit(0);
@@ -80,9 +67,6 @@ struct ServerContext {
     ibv_destroy_cq(cq);
     ibv_dereg_mr(mr);
     free(buf);
-    void *small_buf = send_mr->addr;
-    ibv_dereg_mr(send_mr);
-    free(small_buf);
     ibv_dealloc_pd(dev_info.pd);
     ibv_close_device(dev_info.ctx);
   }
@@ -128,34 +112,21 @@ public:
 
     RdmaModifyQp2Rts(s_ctx.qp, local_info, remote_info);
 
-    for (size_t i = kRdmaQueueSize / 2; i < kRdmaQueueSize; i++) {
-      char *recv_buf = s_ctx.buf + i * kWriteSize;
-      RdmaPostRecv(kWriteSize, s_ctx.mr->lkey,
-                   reinterpret_cast<uint64_t>(recv_buf), s_ctx.qp, recv_buf);
+    for (int i = 0; i < kRdmaQueueSize; i++) {
+      RdmaPostRecv(kBufferSize, s_ctx.mr->lkey, i, s_ctx.qp,
+                   s_ctx.buf + i * kBufferSize);
     }
 
     resp["lid"] = local_info.lid;
     resp["qp_num"] = local_info.qpNum;
     resp["gid"] = RdmaGid2Str(local_info.gid);
     resp["gid_index"] = local_info.gid_index;
-    resp["rkey"] = s_ctx.mr->rkey;
-    resp["remote_addr"] =
-        reinterpret_cast<unsigned long long>(s_ctx.buf); // NOLINT
   }
 };
 
 ServerJrpcServer *jrpc_server = nullptr;
-bool should_infini_loop = true;
 
-void HandleCtrlc(int /*signum*/) {
-  if (jrpc_server != nullptr) {
-    jrpc_server->StopListening();
-  }
-  should_infini_loop = false;
-}
-
-ibv_wc wc[kRdmaQueueSize];
-char compare_buffer[26][kWriteSize];
+ibv_wc wc[kPollCqSize];
 
 int64_t GetUs() {
   timeval tv;
@@ -164,9 +135,6 @@ int64_t GetUs() {
 }
 
 int main(int argc, char *argv[]) {
-  signal(SIGINT, HandleCtrlc);
-  signal(SIGTERM, HandleCtrlc);
-
   if (argc != 3) {
     printf("Usage: %s <dev_name> <port>\n", argv[0]);
     return 0;
@@ -181,53 +149,24 @@ int main(int argc, char *argv[]) {
   jrpc_server->StartListening();
   printf("server start listening...\n");
 
-  for (int i = 0; i < 26; i++) {
-    char c = 'a' + i;
-    memset(compare_buffer[i], c, kWriteSize);
-  }
-  int64_t last_ts = GetUs();
-  size_t cnt_since_last_ts = 0;
-  int batch_send_cnt = 0;
-  while (should_infini_loop) {
-    int n = ibv_poll_cq(s_ctx.cq, kRdmaQueueSize, wc);
+  int recv_cnt = 0;
+  while (recv_cnt < kSendTaskNum) {
+    int n = ibv_poll_cq(s_ctx.cq, kPollCqSize, wc);
     for (int i = 0; i < n; i++) {
-#ifdef SHOW_DEBUG_INFO
-      printf("received #%d send\n", wc[i].imm_data);
-#endif
-      if (wc[i].wr_id == 114514) {
-        continue;
+      if (wc[i].status == IBV_WC_SUCCESS) {
+        if (wc[i].opcode == IBV_WC_RECV) {
+          recv_cnt++;
+          RdmaPostRecv(kBufferSize, s_ctx.mr->lkey, wc[i].wr_id, s_ctx.qp,
+                       s_ctx.buf + wc[i].wr_id * kBufferSize);
+        } else {
+          fprintf(stderr, "ERROR: wc[i] opcode %d", wc[i].opcode);
+        }
+      } else {
+        fprintf(stderr, "ERROR: wc[i] status %d", wc[i].status);
       }
-      batch_send_cnt++;
-      uint64_t wr_id = wc[i].wr_id;
-      size_t which =
-          (wr_id - reinterpret_cast<uint64_t>(s_ctx.buf)) / kWriteSize -
-          (kRdmaQueueSize / 2);
-      // 警告：谨防这里还没check完，server又发送write过来了
-      if (memcmp(s_ctx.buf + which * kWriteSize,
-                 compare_buffer[wc[i].imm_data % 26], kWriteSize) != 0) {
-
-        printf("get #%d loc %zu\n", wc[i].imm_data, which);
-        printf("OOPS: write %d it not as expected %d\n",
-               static_cast<int>(*(s_ctx.buf + which * kWriteSize)),
-               'a' + (wc[i].imm_data % 26));
-      }
-      RdmaPostRecv(kWriteSize, s_ctx.mr->lkey, wc[i].wr_id, s_ctx.qp,
-                   reinterpret_cast<void *>(wc[i].wr_id)); // NOLINT
-    }
-    // 一轮一轮允许发送
-    if (batch_send_cnt == kRdmaQueueSize / 2) {
-      batch_send_cnt = 0;
-      RdmaPostSend(4, s_ctx.send_mr->lkey, 114514, 1919810, s_ctx.qp, s_ctx.send_mr->addr);
-    }
-    cnt_since_last_ts += n;
-    int64_t curr_ts = GetUs();
-    if (curr_ts - last_ts >= kShowInterval) {
-      printf("%lu write-send in %.2f seconds\n", cnt_since_last_ts,
-             (curr_ts - last_ts) / 1000000.0);
-      last_ts = curr_ts;
-      cnt_since_last_ts = 0;
     }
   }
+
   s_ctx.DestroyRdmaEnvironment();
 
   return 0;

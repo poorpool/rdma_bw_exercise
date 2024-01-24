@@ -27,11 +27,13 @@ struct RdmaQpExchangeInfo {
 
 constexpr int kRdmaDefaultPort = 1; // 查询设备信息时使用的默认端口号
 constexpr int kRdmaSl = 0;          // service level
-constexpr size_t kWriteSize = 1024 * 1024;
-constexpr int kTransmitDepth = 2048; // 同时可以有多少个 Write+Send 组合
+constexpr size_t kBufferSize = 64 * 1024;
+constexpr size_t kSendTaskNum = 1024 * 256;
+constexpr int kTransmitLimit = 128;
+constexpr int kPollCqSize = 16;
 // WQ、CQ 的大小
-constexpr int kRdmaQueueSize = kTransmitDepth * 2;
-constexpr int kGidIndex = 3; // magic
+constexpr int kRdmaQueueSize = 1024;
+constexpr int kGidIndex = 0; // magic
 
 // 通过网卡名称获取 RdmaDeviceInfo
 std::vector<RdmaDeviceInfo>
