@@ -17,7 +17,7 @@ cd ../..
 echo "installing libjson-rpc-cpp..."
 cd libjson-rpc-cpp
 mkdir -p build && cd build
-cmake  -DCMAKE_PREFIX_PATH=${install_dir} \
+cmake -DCMAKE_PREFIX_PATH=${install_dir} \
   -DCMAKE_LIBRARY_PATH=${install_dir} \
   -DCMAKE_INSTALL_PREFIX=${install_dir} \
   -DCOMPILE_TESTS=NO -DCOMPILE_STUBGEN=NO -DCOMPILE_EXAMPLES=NO \

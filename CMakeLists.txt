@@ -8,13 +8,11 @@ SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -g -ggdb -fno-omit-frame-pointer -
 SET(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O3")
 
 # 记得换成你的目录
-set(CMAKE_PREFIX_PATH "/home/cyx/rdma_bw_exercise/deps/install/lib")
+list(APPEND CMAKE_PREFIX_PATH "/home/cyx/rdma_bw_exercise/deps/install/lib")
+list(APPEND CMAKE_PREFIX_PATH "/home/cyx/rdma_bw_exercise/deps/install/lib/cmake")
 include_directories("/home/cyx/rdma_bw_exercise/deps/install/include")
 
 find_package(jsoncpp REQUIRED)
-message("FOUND CONFIG: ${jsoncpp_CONFIG}")
-message("INCLUDE DIRS: ${jsoncpp_INCLUDE_DIRS}")
-message("LIBRARIES: ${jsoncpp_LIBRARIES}")
 find_package(libjson-rpc-cpp REQUIRED)
 
 add_executable(saw_server server.cc rdma.cc)
