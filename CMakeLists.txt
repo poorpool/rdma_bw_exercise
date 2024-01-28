@@ -8,8 +8,7 @@ SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -g -ggdb -fno-omit-frame-pointer -
 SET(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O3")
 
 # 记得换成你的目录
-list(APPEND CMAKE_PREFIX_PATH "/home/cyx/rdma_bw_exercise/deps/install/lib")
-list(APPEND CMAKE_PREFIX_PATH "/home/cyx/rdma_bw_exercise/deps/install/lib/cmake")
+set(CMAKE_PREFIX_PATH "/home/cyx/rdma_bw_exercise/deps/install")
 include_directories("/home/cyx/rdma_bw_exercise/deps/install/include")
 
 find_package(jsoncpp REQUIRED)

@@ -9,6 +9,8 @@
 ./install_deps.sh
 ```
 
+CMakeLists.txt 也要改一下
+
 ## 编译
 
 ```bash
