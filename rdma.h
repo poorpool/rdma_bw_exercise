@@ -28,7 +28,7 @@ struct RdmaQpExchangeInfo {
 constexpr int kRdmaDefaultPort = 1; // 查询设备信息时使用的默认端口号
 constexpr int kRdmaSl = 0;          // service level
 constexpr size_t kBufferSize = 64 * 1024;
-constexpr size_t kSendTaskNum = 1024 * 256;
+constexpr size_t kSendTaskNum = 1024 * 1;
 constexpr int kTransmitLimit = 128;
 constexpr int kPollCqSize = 16;
 // WQ、CQ 的大小

@@ -20,6 +20,7 @@ CMakeLists.txt 也要改一下
 ## 运行
 
 ```bash
+export LD_LIBRARY_PATH=/home/cyx/rdma_bw_exercise/deps/install/lib
 ./build/saw_server mlx4_0 7897
 ```
 

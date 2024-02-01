@@ -18,12 +18,12 @@ echo "installing libjson-rpc-cpp..."
 cd libjson-rpc-cpp
 mkdir -p build && cd build
 cmake -DCMAKE_PREFIX_PATH=${install_dir} \
-  -DCMAKE_LIBRARY_PATH=${install_dir} \
   -DCMAKE_INSTALL_PREFIX=${install_dir} \
   -DCOMPILE_TESTS=NO -DCOMPILE_STUBGEN=NO -DCOMPILE_EXAMPLES=NO \
   -DHTTP_SERVER=NO -DHTTP_CLIENT=NO -DREDIS_SERVER=NO -DREDIS_CLIENT=NO \
   -DTCP_SOCKET_SERVER=YES -DTCP_SOCKET_CLIENT=YES \
   ..
+  #-DCMAKE_LIBRARY_PATH=${install_dir} \ 
 make -j10
 make install
 cd ../..
